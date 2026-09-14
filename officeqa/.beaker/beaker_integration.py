@@ -112,20 +112,48 @@ async def run_case(*, case_input: JsonValue, runtime: RolloutRuntime) -> CaseRes
     corpus_root = await _ensure_corpus_ready(config.DEFAULT_CORPUS)
 
     with runtime.trace.stage("officeqa.run_case", inputs={"uid": uid, "question": question}) as stage:
-        res = await run_one_async(
-            sample,
-            model=model_name,
-            corpus_root=corpus_root,
-        )
-        output = {
-            "final_answer": res.final_answer,
-            "status": res.status,
-            "steps": res.steps,
-            "tool_calls": res.tool_calls,
-            "cost_usd": res.cost_usd,
-            "latency_s": res.latency_s,
-            "error": res.error,
-        }
+        try:
+            # Bound case runtime (480s / 40 steps) to prevent candidate hangs
+            # and guarantee cases complete well before the 900s candidate watchdog.
+            res = await asyncio.wait_for(
+                run_one_async(
+                    sample,
+                    model=model_name,
+                    corpus_root=corpus_root,
+                    task_timeout_s=480.0,
+                    max_steps=40,
+                ),
+                timeout=540.0,
+            )
+            output = {
+                "final_answer": res.final_answer,
+                "status": res.status,
+                "steps": res.steps,
+                "tool_calls": res.tool_calls,
+                "cost_usd": res.cost_usd,
+                "latency_s": res.latency_s,
+                "error": res.error,
+            }
+        except asyncio.TimeoutError:
+            output = {
+                "final_answer": None,
+                "status": "timeout",
+                "steps": 0,
+                "tool_calls": 0,
+                "cost_usd": None,
+                "latency_s": 540.0,
+                "error": "Case timed out after 540s",
+            }
+        except Exception as exc:
+            output = {
+                "final_answer": None,
+                "status": "error",
+                "steps": 0,
+                "tool_calls": 0,
+                "cost_usd": None,
+                "latency_s": 0.0,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
         stage.output(output)
 
     return CaseResult(output=output, output_kind="record")

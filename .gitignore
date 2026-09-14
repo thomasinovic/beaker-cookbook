@@ -47,3 +47,4 @@ htmlcov/
 # Secrets
 .env
 .env.local
+traces_reviews/
