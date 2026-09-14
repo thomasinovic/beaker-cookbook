@@ -13,5 +13,6 @@ integrations:
     source_dir: officeqa
     required_env:
       - OPENAI_API_KEY
+      - HF_TOKEN
     environment_base: debian_slim:3.12
 default_integration: officeqa

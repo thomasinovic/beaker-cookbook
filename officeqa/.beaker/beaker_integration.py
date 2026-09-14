@@ -5,6 +5,8 @@ Keep evaluation tooling in .beaker/.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from beaker import (
 from pydantic import BaseModel, Field
 
 from officeqa import config
+from officeqa.data.corpus import ensure_corpus, fetch_corpus
 from officeqa.data.dataset import EvalRecord
 from officeqa.evaluation.reward import score_answer
 from officeqa.runner import run_one_async
@@ -62,6 +65,26 @@ class Setup(RepositoryRunSetup[Row]):
         )
 
 
+logger = logging.getLogger(__name__)
+
+_CORPUS_LOCK = asyncio.Lock()
+
+
+async def _ensure_corpus_ready(representation: str = config.DEFAULT_CORPUS) -> Path:
+    """Ensure the required corpus representation is present, fetching it if missing."""
+    try:
+        return ensure_corpus(representation)
+    except FileNotFoundError:
+        pass
+
+    async with _CORPUS_LOCK:
+        try:
+            return ensure_corpus(representation)
+        except FileNotFoundError:
+            logger.info("Corpus representation %r not found; fetching from Hugging Face...", representation)
+            return await asyncio.to_thread(fetch_corpus, (representation,))
+
+
 async def run_case(*, case_input: JsonValue, runtime: RolloutRuntime) -> CaseResult:
     inp = case_input if isinstance(case_input, dict) else QuestionInput.model_validate(case_input).model_dump()
     uid = str(inp.get("uid") or "")
@@ -86,10 +109,13 @@ async def run_case(*, case_input: JsonValue, runtime: RolloutRuntime) -> CaseRes
         except Exception:
             model_name = runtime.model.split(":", 1)[1] if ":" in runtime.model else runtime.model
 
+    corpus_root = await _ensure_corpus_ready(config.DEFAULT_CORPUS)
+
     with runtime.trace.stage("officeqa.run_case", inputs={"uid": uid, "question": question}) as stage:
         res = await run_one_async(
             sample,
             model=model_name,
+            corpus_root=corpus_root,
         )
         output = {
             "final_answer": res.final_answer,
