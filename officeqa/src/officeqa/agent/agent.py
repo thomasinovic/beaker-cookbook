@@ -126,9 +126,20 @@ class LiteLLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            kwargs["reasoning_effort"] = self.reasoning_effort
-        resp = await litellm.acompletion(**kwargs)
+        try:
+            from beaker.tracing import current_trace
+            from beaker.tracing.integrations.litellm import registered
+
+            has_beaker = True
+        except ImportError:
+            has_beaker = False
+
+        if has_beaker:
+            async with registered(current_trace()) as litellm_trace:
+                resp = await litellm.acompletion(**kwargs)
+                await litellm_trace.flush()
+        else:
+            resp = await litellm.acompletion(**kwargs)
         choice = resp.choices[0]
         msg = choice.message
         tool_calls: list[dict[str, Any]] = []
